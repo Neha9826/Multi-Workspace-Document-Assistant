@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 type DocumentFile = {
@@ -13,14 +20,40 @@ type DocumentFile = {
   } | null;
 };
 
+type DocumentManagerProps = {
+  userId: string;
+  workspaceId: string;
+  workspaceName: string;
+};
+
 const BUCKET = "documents";
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
+function formatSize(bytes?: number) {
+  if (bytes == null) return "—";
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatDate(dateString: string) {
+  const date = new Date(dateString);
+
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const year = date.getUTCFullYear();
+
+  return `${day}/${month}/${year}`;
+}
+
 export default function DocumentManager({
   userId,
-}: {
-  userId: string;
-}) {
+  workspaceId,
+  workspaceName,
+}: DocumentManagerProps) {
   const [files, setFiles] = useState<DocumentFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -33,30 +66,42 @@ export default function DocumentManager({
 
   const supabase = useMemo(() => createClient(), []);
 
+  // All operations are scoped to this user's selected workspace.
+  const workspacePath = `${userId}/${workspaceId}`;
+
   const loadFiles = useCallback(async () => {
     setLoading(true);
     setError("");
 
-    const { data, error: listError } = await supabase.storage
-      .from(BUCKET)
-      .list(userId, {
-        limit: 100,
-        sortBy: { column: "created_at", order: "desc" },
-      });
+    try {
+      const { data, error: listError } = await supabase.storage
+        .from(BUCKET)
+        .list(workspacePath, {
+          limit: 100,
+          sortBy: {
+            column: "created_at",
+            order: "desc",
+          },
+        });
 
-    if (listError) {
-      setError(listError.message);
-      setFiles([]);
-    } else {
+      if (listError) {
+        setError(listError.message);
+        setFiles([]);
+        return;
+      }
+
       setFiles(
         (data ?? []).filter(
           (file) => file.name && !file.name.startsWith("."),
         ),
       );
+    } catch {
+      setError("An unexpected error occurred while loading documents.");
+      setFiles([]);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
-  }, [supabase, userId]);
+  }, [supabase, workspacePath]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -66,9 +111,7 @@ export default function DocumentManager({
     return () => window.clearTimeout(timer);
   }, [loadFiles]);
 
-  async function handleUpload(
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) {
+  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     const file = input.files?.[0];
 
@@ -96,7 +139,8 @@ export default function DocumentManager({
         .normalize("NFKD")
         .replace(/[^a-zA-Z0-9._-]/g, "_");
 
-      const filePath = `${userId}/${crypto.randomUUID()}-${safeName}`;
+      const fileName = `${crypto.randomUUID()}-${safeName}`;
+      const filePath = `${workspacePath}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from(BUCKET)
@@ -126,7 +170,7 @@ export default function DocumentManager({
     setDownloadingFile(fileName);
 
     try {
-      const filePath = `${userId}/${fileName}`;
+      const filePath = `${workspacePath}/${fileName}`;
 
       const { data, error: downloadError } = await supabase.storage
         .from(BUCKET)
@@ -158,7 +202,7 @@ export default function DocumentManager({
 
   async function handleDelete(fileName: string) {
     const confirmed = window.confirm(
-      `Delete "${fileName}"? This cannot be undone.`,
+      `Delete "${fileName}" from "${workspaceName}"? This cannot be undone.`,
     );
 
     if (!confirmed) return;
@@ -168,9 +212,11 @@ export default function DocumentManager({
     setDeletingFile(fileName);
 
     try {
+      const filePath = `${workspacePath}/${fileName}`;
+
       const { error: deleteError } = await supabase.storage
         .from(BUCKET)
-        .remove([`${userId}/${fileName}`]);
+        .remove([filePath]);
 
       if (deleteError) {
         setError(deleteError.message);
@@ -186,38 +232,32 @@ export default function DocumentManager({
     }
   }
 
-  function formatSize(bytes?: number) {
-    if (bytes == null) return "—";
-
-    if (bytes < 1024 * 1024) {
-      return `${(bytes / 1024).toFixed(1)} KB`;
-    }
-
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
+  const busy = uploading || downloadingFile !== null || deletingFile !== null;
 
   return (
-    <main className="mx-auto min-h-screen max-w-5xl px-6 py-10">
+    <div className="mx-auto min-h-screen max-w-5xl px-6 py-10">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <a
+          <Link
             href="/dashboard"
             className="text-sm text-blue-400 hover:underline"
           >
             ← Back to dashboard
-          </a>
+          </Link>
 
-          <h1 className="mt-3 text-3xl font-bold">
-            Your Documents
+          <p className="mt-5 text-sm text-blue-400">Current workspace</p>
+
+          <h1 className="mt-1 break-words text-3xl font-bold">
+            {workspaceName}
           </h1>
 
-          <p className="mt-2 text-gray-400">
-            Upload and manage your PDF documents securely.
+          <p className="mt-2 text-slate-400">
+            Upload and manage PDFs in this workspace.
           </p>
         </div>
 
         <label
-          className={`cursor-pointer rounded-lg bg-blue-600 px-5 py-3 font-medium text-white hover:bg-blue-700 ${
+          className={`inline-flex cursor-pointer items-center rounded-lg bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 ${
             uploading ? "cursor-not-allowed opacity-50" : ""
           }`}
         >
@@ -227,14 +267,17 @@ export default function DocumentManager({
             type="file"
             accept=".pdf,application/pdf"
             className="hidden"
-            disabled={uploading}
+            disabled={busy}
             onChange={handleUpload}
           />
         </label>
       </header>
 
       {message && (
-        <p className="mb-4 rounded-lg border border-green-800 bg-green-950 p-3 text-green-300">
+        <p
+          role="status"
+          className="mb-4 rounded-lg border border-green-800 bg-green-950 p-3 text-green-300"
+        >
           {message}
         </p>
       )}
@@ -248,45 +291,49 @@ export default function DocumentManager({
         </p>
       )}
 
-      <section className="rounded-xl border border-gray-800 bg-slate-900/60 p-5">
-        <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Uploaded files</h2>
+      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Uploaded documents</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Files in {workspaceName}
+            </p>
+          </div>
 
           <button
             type="button"
             onClick={() => void loadFiles()}
-            disabled={loading}
-            className="text-sm text-blue-400 hover:underline disabled:opacity-50"
+            disabled={loading || busy}
+            className="text-sm text-blue-400 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Refreshing..." : "Refresh"}
           </button>
         </div>
 
         {loading ? (
-          <p className="text-gray-400">Loading documents...</p>
+          <p className="py-8 text-slate-400">Loading documents...</p>
         ) : files.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-gray-700 px-4 py-12 text-center">
-            <p className="font-medium">No documents yet</p>
-            <p className="mt-2 text-sm text-gray-400">
+          <div className="rounded-lg border border-dashed border-slate-700 px-4 py-12 text-center">
+            <p className="font-medium">No documents in this workspace yet</p>
+            <p className="mt-2 text-sm text-slate-400">
               Upload a PDF to get started.
             </p>
           </div>
         ) : (
-          <ul className="divide-y divide-gray-800">
+          <ul className="divide-y divide-slate-800">
             {files.map((file) => (
               <li
                 key={file.id ?? file.name}
                 className="flex flex-wrap items-center justify-between gap-4 py-4"
               >
                 <div className="min-w-0">
-                  <p className="break-all font-medium">
-                    {file.name}
-                  </p>
+                  <p className="break-all font-medium">{file.name}</p>
 
-                  <p className="mt-1 text-sm text-gray-400">
+                  <p className="mt-1 text-sm text-slate-400">
                     {formatSize(file.metadata?.size)}
-                    {file.created_at &&
-                      ` · ${new Date(file.created_at).toLocaleDateString()}`}
+                    {file.created_at
+                      ? ` · ${formatDate(file.created_at)}`
+                      : ""}
                   </p>
                 </div>
 
@@ -294,11 +341,8 @@ export default function DocumentManager({
                   <button
                     type="button"
                     onClick={() => void handleDownload(file.name)}
-                    disabled={
-                      downloadingFile !== null ||
-                      deletingFile !== null
-                    }
-                    className="rounded-lg border border-gray-700 px-3 py-2 text-sm text-blue-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={busy}
+                    className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-blue-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {downloadingFile === file.name
                       ? "Downloading..."
@@ -308,15 +352,10 @@ export default function DocumentManager({
                   <button
                     type="button"
                     onClick={() => void handleDelete(file.name)}
-                    disabled={
-                      deletingFile !== null ||
-                      downloadingFile !== null
-                    }
-                    className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-300 hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={busy}
+                    className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-300 transition hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {deletingFile === file.name
-                      ? "Deleting..."
-                      : "Delete"}
+                    {deletingFile === file.name ? "Deleting..." : "Delete"}
                   </button>
                 </div>
               </li>
@@ -324,6 +363,6 @@ export default function DocumentManager({
           </ul>
         )}
       </section>
-    </main>
+    </div>
   );
 }
