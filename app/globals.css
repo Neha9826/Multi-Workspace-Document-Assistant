@@ -24,3 +24,53 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Authentication page layout */
+.auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.auth-card {
+  min-width: 0;
+}
+
+.brand-mark {
+  display: flex;
+  width: 3rem;
+  height: 3rem;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1rem;
+  border-radius: 0.75rem;
+  background: #2563eb;
+  color: white;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.google-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 0.875rem 1rem;
+  color: white;
+  font-weight: 500;
+  transition: background 150ms ease;
+}
+
+.google-button:hover {
+  background: #1e293b;
+}
+
+@media (max-width: 767px) {
+  .auth-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
