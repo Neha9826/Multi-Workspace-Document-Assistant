@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { signOutAction } from "@/app/login/actions";
 import WorkspaceManager from "./WorkspaceManager";
+import ToolCallLog from "./ToolCallLog";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -20,6 +21,35 @@ export default async function DashboardPage() {
       .from("workspaces")
       .select("id, name, created_at")
       .order("created_at", { ascending: false });
+
+  const workspaceIds = (workspaces ?? []).map(
+    (workspace) => workspace.id,
+  );
+
+  const { data: toolLogs } =
+    workspaceIds.length > 0
+      ? await supabase
+          .from("tool_call_logs")
+          .select(
+            "id, workspace_id, conversation_id, tool_name, arguments, result, success, error, created_at",
+          )
+          .in("workspace_id", workspaceIds)
+          .order("created_at", { ascending: false })
+          .limit(50)
+      : { data: [] };
+
+  const workspaceNames = new Map(
+    (workspaces ?? []).map((workspace) => [
+      workspace.id,
+      workspace.name,
+    ]),
+  );
+
+  const dashboardToolLogs = (toolLogs ?? []).map((log) => ({
+    ...log,
+    workspace_name:
+      workspaceNames.get(log.workspace_id) ?? "Unknown workspace",
+  }));
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -71,6 +101,8 @@ export default async function DashboardPage() {
             userId={user.id}
           />
         )}
+
+        <ToolCallLog logs={dashboardToolLogs} />
       </section>
     </main>
   );

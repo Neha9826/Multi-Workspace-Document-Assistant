@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 
 type DocumentRecord = {
   id: string;
+  workspace_id: string;
   file_name: string;
   storage_path: string;
   mime_type: string;
@@ -55,29 +56,32 @@ export default function DocumentManager({
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [downloadingFile, setDownloadingFile] = useState<string | null>(
-    null,
-  );
-  const [deletingFile, setDeletingFile] = useState<string | null>(null);
+  const [downloadingDocument, setDownloadingDocument] =
+    useState<string | null>(null);
+  const [deletingDocument, setDeletingDocument] =
+    useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   const supabase = useMemo(() => createClient(), []);
-
-  const workspacePath = `${userId}/${workspaceId}`;
 
   const loadDocuments = useCallback(async () => {
     setLoading(true);
     setError("");
 
     try {
-      const { data, error: documentsError } = await supabase
+      const {
+        data,
+        error: documentsError,
+      } = await supabase
         .from("documents")
         .select(
-          "id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
+          "id, workspace_id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
         )
         .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: false });
+        .order("created_at", {
+          ascending: false,
+        });
 
       if (documentsError) {
         setError(documentsError.message);
@@ -85,9 +89,11 @@ export default function DocumentManager({
         return;
       }
 
-      setDocuments(data ?? []);
+      setDocuments((data ?? []) as DocumentRecord[]);
     } catch {
-      setError("An unexpected error occurred while loading documents.");
+      setError(
+        "An unexpected error occurred while loading documents.",
+      );
       setDocuments([]);
     } finally {
       setLoading(false);
@@ -102,7 +108,9 @@ export default function DocumentManager({
     return () => window.clearTimeout(timer);
   }, [loadDocuments]);
 
-  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+  async function handleUpload(
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
     const input = event.currentTarget;
     const file = input.files?.[0];
 
@@ -132,11 +140,15 @@ export default function DocumentManager({
         .normalize("NFKD")
         .replace(/[^a-zA-Z0-9._-]/g, "_");
 
-      const fileName = `${crypto.randomUUID()}-${safeName}`;
-      const storagePath = `${workspacePath}/${fileName}`;
+      const storageFileName =
+        `${crypto.randomUUID()}-${safeName}`;
 
-      // Step 1: Upload the actual PDF to Supabase Storage.
-      const { error: uploadError } = await supabase.storage
+      const storagePath =
+        `${userId}/${workspaceId}/${storageFileName}`;
+
+      const {
+        error: uploadError,
+      } = await supabase.storage
         .from(BUCKET)
         .upload(storagePath, file, {
           contentType: "application/pdf",
@@ -148,8 +160,10 @@ export default function DocumentManager({
         return;
       }
 
-      // Step 2: Store document metadata in PostgreSQL.
-      const { data: document, error: metadataError } = await supabase
+      const {
+        data: document,
+        error: metadataError,
+      } = await supabase
         .from("documents")
         .insert({
           workspace_id: workspaceId,
@@ -160,41 +174,89 @@ export default function DocumentManager({
           uploaded_by: userId,
         })
         .select(
-          "id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
+          "id, workspace_id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
         )
         .single();
 
-      // Compensating cleanup:
-      // If the database insert fails, remove the Storage object so we
-      // don't leave an orphaned PDF behind.
       if (metadataError || !document) {
-        await supabase.storage.from(BUCKET).remove([storagePath]);
+        await supabase.storage
+          .from(BUCKET)
+          .remove([storagePath]);
 
         setError(
-          metadataError?.message ??
-            "Document metadata could not be saved.",
+          metadataError?.message ||
+            "Failed to save document metadata.",
         );
 
         return;
       }
 
-      setDocuments((current) => [document, ...current]);
-      setMessage("PDF uploaded successfully.");
+      const ingestionResponse = await fetch(
+        "/api/documents/ingest",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            documentId: document.id,
+          }),
+        },
+      );
+
+      const responseText =
+        await ingestionResponse.text();
+
+      let ingestionResult: {
+        error?: string;
+      } = {};
+
+      if (responseText.trim()) {
+        try {
+          ingestionResult =
+            JSON.parse(responseText);
+        } catch {
+          ingestionResult = {};
+        }
+      }
+
+      if (!ingestionResponse.ok) {
+        setError(
+          ingestionResult.error ||
+            "The PDF was uploaded, but document processing failed.",
+        );
+
+        await loadDocuments();
+        return;
+      }
+
+      setMessage(
+        "PDF uploaded and processed successfully.",
+      );
+
+      await loadDocuments();
     } catch {
-      setError("An unexpected error occurred while uploading.");
+      setError(
+        "An unexpected error occurred while uploading the document.",
+      );
     } finally {
       setUploading(false);
       input.value = "";
     }
   }
 
-  async function handleDownload(document: DocumentRecord) {
+  async function handleDownload(
+    document: DocumentRecord,
+  ) {
     setError("");
     setMessage("");
-    setDownloadingFile(document.id);
+    setDownloadingDocument(document.id);
 
     try {
-      const { data, error: downloadError } = await supabase.storage
+      const {
+        data,
+        error: downloadError,
+      } = await supabase.storage
         .from(BUCKET)
         .download(document.storage_path);
 
@@ -213,17 +275,23 @@ export default function DocumentManager({
       link.click();
       link.remove();
 
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 1000);
 
       setMessage("Document download started.");
     } catch {
-      setError("An unexpected error occurred while downloading.");
+      setError(
+        "An unexpected error occurred while downloading.",
+      );
     } finally {
-      setDownloadingFile(null);
+      setDownloadingDocument(null);
     }
   }
 
-  async function handleDelete(document: DocumentRecord) {
+  async function handleDelete(
+    document: DocumentRecord,
+  ) {
     const confirmed = window.confirm(
       `Delete "${document.file_name}" from "${workspaceName}"? This cannot be undone.`,
     );
@@ -234,51 +302,52 @@ export default function DocumentManager({
 
     setError("");
     setMessage("");
-    setDeletingFile(document.id);
+    setDeletingDocument(document.id);
 
     try {
-      // Step 1: Remove the actual file from Storage.
-      const { error: storageError } = await supabase.storage
+      const {
+        error: storageDeleteError,
+      } = await supabase.storage
         .from(BUCKET)
         .remove([document.storage_path]);
 
-      if (storageError) {
-        setError(storageError.message);
+      if (storageDeleteError) {
+        setError(storageDeleteError.message);
         return;
       }
 
-      // Step 2: Remove its metadata row.
-      const { error: metadataError } = await supabase
+      const {
+        error: metadataDeleteError,
+      } = await supabase
         .from("documents")
         .delete()
         .eq("id", document.id)
         .eq("workspace_id", workspaceId);
 
-      if (metadataError) {
+      if (metadataDeleteError) {
         setError(
-          `The file was removed from storage, but its metadata could not be deleted: ${metadataError.message}`,
+          "The PDF was removed from storage, but its metadata could not be deleted. Refresh and try again.",
         );
 
         await loadDocuments();
         return;
       }
 
-      setDocuments((current) =>
-        current.filter((item) => item.id !== document.id),
-      );
-
       setMessage("Document deleted.");
+      await loadDocuments();
     } catch {
-      setError("An unexpected error occurred while deleting.");
+      setError(
+        "An unexpected error occurred while deleting the document.",
+      );
     } finally {
-      setDeletingFile(null);
+      setDeletingDocument(null);
     }
   }
 
   const busy =
     uploading ||
-    downloadingFile !== null ||
-    deletingFile !== null;
+    downloadingDocument !== null ||
+    deletingDocument !== null;
 
   return (
     <div className="mx-auto min-h-screen max-w-5xl px-6 py-10">
@@ -305,13 +374,15 @@ export default function DocumentManager({
         </div>
 
         <label
-          className={`inline-flex items-center rounded-lg bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 ${
-            busy
+          className={`inline-flex cursor-pointer items-center rounded-lg bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 ${
+            uploading
               ? "cursor-not-allowed opacity-50"
-              : "cursor-pointer"
+              : ""
           }`}
         >
-          {uploading ? "Uploading..." : "Upload PDF"}
+          {uploading
+            ? "Processing..."
+            : "Upload PDF"}
 
           <input
             type="file"
@@ -359,7 +430,9 @@ export default function DocumentManager({
             disabled={loading || busy}
             className="text-sm text-blue-400 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {loading ? "Refreshing..." : "Refresh"}
+            {loading
+              ? "Refreshing..."
+              : "Refresh"}
           </button>
         </div>
 
@@ -379,48 +452,70 @@ export default function DocumentManager({
           </div>
         ) : (
           <ul className="divide-y divide-slate-800">
-            {documents.map((document) => (
-              <li
-                key={document.id}
-                className="flex flex-wrap items-center justify-between gap-4 py-4"
-              >
-                <div className="min-w-0">
-                  <p className="break-all font-medium">
-                    {document.file_name}
-                  </p>
+            {documents.map((document) => {
+              const chatUrl =
+                `/chat?workspace=${encodeURIComponent(
+                  workspaceId,
+                )}&document=${encodeURIComponent(
+                  document.id,
+                )}`;
 
-                  <p className="mt-1 text-sm text-slate-400">
-                    {formatSize(document.size_bytes)}
-                    {" · "}
-                    {formatDate(document.created_at)}
-                  </p>
-                </div>
+              return (
+                <li
+                  key={document.id}
+                  className="flex flex-wrap items-center justify-between gap-4 py-4"
+                >
+                  <div className="min-w-0">
+                    <p className="break-all font-medium">
+                      {document.file_name}
+                    </p>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleDownload(document)}
-                    disabled={busy}
-                    className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-blue-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {downloadingFile === document.id
-                      ? "Downloading..."
-                      : "Download"}
-                  </button>
+                    <p className="mt-1 text-sm text-slate-400">
+                      {formatSize(document.size_bytes)}
+                      {" · "}
+                      {formatDate(document.created_at)}
+                    </p>
+                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => void handleDelete(document)}
-                    disabled={busy}
-                    className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-300 transition hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {deletingFile === document.id
-                      ? "Deleting..."
-                      : "Delete"}
-                  </button>
-                </div>
-              </li>
-            ))}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link
+                      href={chatUrl}
+                      className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-white transition hover:bg-slate-800"
+                    >
+                      ✦ Ask AI
+                    </Link>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void handleDownload(document)
+                      }
+                      disabled={busy}
+                      className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-blue-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {downloadingDocument ===
+                      document.id
+                        ? "Downloading..."
+                        : "Download"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void handleDelete(document)
+                      }
+                      disabled={busy}
+                      className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-300 transition hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {deletingDocument ===
+                      document.id
+                        ? "Deleting..."
+                        : "Delete"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
