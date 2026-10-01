@@ -1,9 +1,5 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  serverExternalPackages: [
-    "onnxruntime-node",
-  ],
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;
