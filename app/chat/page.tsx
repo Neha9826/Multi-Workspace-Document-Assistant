@@ -19,7 +19,7 @@ export default async function ChatPage({
     conversation: conversationId,
   } = await searchParams;
 
-  if (!workspaceId || !documentId) {
+  if (!workspaceId) {
     redirect("/dashboard");
   }
 
@@ -45,20 +45,33 @@ export default async function ChatPage({
     redirect("/dashboard");
   }
 
-  const { data: document } =
-    await supabase
-      .from("documents")
-      .select(
-        "id, file_name, workspace_id",
-      )
-      .eq("id", documentId)
-      .eq("workspace_id", workspaceId)
-      .maybeSingle();
+  let document: {
+    id: string;
+    file_name: string;
+    workspace_id: string;
+  } | null = null;
 
-  if (!document) {
-    redirect(
-      `/documents?workspace=${workspaceId}`,
-    );
+  if (documentId) {
+    const { data } =
+      await supabase
+        .from("documents")
+        .select(
+          "id, file_name, workspace_id",
+        )
+        .eq("id", documentId)
+        .eq(
+          "workspace_id",
+          workspaceId,
+        )
+        .maybeSingle();
+
+    if (!data) {
+      redirect(
+        `/documents?workspace=${workspaceId}`,
+      );
+    }
+
+    document = data;
   }
 
   let validConversationId:
@@ -66,15 +79,35 @@ export default async function ChatPage({
     | null = null;
 
   if (conversationId) {
-    const { data: conversation } =
-      await supabase
+    let query =
+      supabase
         .from("chat_conversations")
         .select("id")
-        .eq("id", conversationId)
-        .eq("user_id", user.id)
-        .eq("workspace_id", workspaceId)
-        .eq("document_id", documentId)
-        .maybeSingle();
+        .eq(
+          "id",
+          conversationId,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "workspace_id",
+          workspaceId,
+        );
+
+    query = documentId
+      ? query.eq(
+          "document_id",
+          documentId,
+        )
+      : query.is(
+          "document_id",
+          null,
+        );
+
+    const { data: conversation } =
+      await query.maybeSingle();
 
     if (conversation) {
       validConversationId =
@@ -86,8 +119,12 @@ export default async function ChatPage({
     <ChatManager
       workspaceId={workspace.id}
       workspaceName={workspace.name}
-      documentId={document.id}
-      documentName={document.file_name}
+      documentId={
+        document?.id ?? null
+      }
+      documentName={
+        document?.file_name ?? null
+      }
       initialConversationId={
         validConversationId
       }

@@ -13,8 +13,8 @@ import {
 } from "next/navigation";
 
 type Source = {
-  documentId: string;
-  documentName: string;
+  documentId: string | null;
+  documentName: string | null;
   chunkIndex: number;
   similarity: number;
   preview: string;
@@ -38,8 +38,8 @@ type Conversation = {
 type ChatManagerProps = {
   workspaceId: string;
   workspaceName: string;
-  documentId: string;
-  documentName: string;
+  documentId: string | null;
+  documentName: string | null;
   initialConversationId: string | null;
 };
 
@@ -363,10 +363,12 @@ export default function ChatManager({
           workspaceId,
         );
 
-        params.set(
-          "document",
-          documentId,
-        );
+        if (documentId) {
+          params.set(
+            "document",
+            documentId,
+          );
+        }
 
         if (
           selectedConversationId
@@ -434,9 +436,12 @@ export default function ChatManager({
       initialConversationId ||
       null;
 
-    setConversationId(selected);
+    const syncConversation = async () => {
+      await loadHistory(selected);
+      setConversationId(selected);
+    };
 
-    void loadHistory(selected);
+    void syncConversation();
   }, [
     searchParams,
     initialConversationId,
@@ -457,6 +462,27 @@ export default function ChatManager({
     );
   }
 
+  function buildChatUrl(
+    nextConversationId?: string | null,
+  ) {
+    const params = new URLSearchParams();
+
+    params.set("workspace", workspaceId);
+
+    if (documentId) {
+      params.set("document", documentId);
+    }
+
+    if (nextConversationId) {
+      params.set(
+        "conversation",
+        nextConversationId,
+      );
+    }
+
+    return `/chat?${params.toString()}`;
+  }
+
   function startNewChat() {
     setConversationId(null);
     setMessages([]);
@@ -465,9 +491,7 @@ export default function ChatManager({
     setEditingMessageId(null);
     setOpenMenuId(null);
 
-    router.push(
-      `/chat?workspace=${workspaceId}&document=${documentId}`,
-    );
+    router.push(buildChatUrl());
   }
 
   function openConversation(
@@ -478,9 +502,7 @@ export default function ChatManager({
     setOpenMenuId(null);
     setEditingMessageId(null);
 
-    router.push(
-      `/chat?workspace=${workspaceId}&document=${documentId}&conversation=${id}`,
-    );
+    router.push(buildChatUrl(id));
   }
 
   async function copyMessage(
@@ -602,7 +624,7 @@ export default function ChatManager({
       );
 
       router.replace(
-        `/chat?workspace=${workspaceId}&document=${documentId}&conversation=${data.conversationId}`,
+        buildChatUrl(data.conversationId),
       );
     } catch (err) {
       setError(
@@ -688,7 +710,7 @@ export default function ChatManager({
       );
 
       router.replace(
-        `/chat?workspace=${workspaceId}&document=${documentId}&conversation=${data.conversationId}`,
+        buildChatUrl(data.conversationId),
       );
     } catch (err) {
       setError(
@@ -821,9 +843,7 @@ export default function ChatManager({
         setMessages([]);
         setQuestion("");
 
-        router.push(
-          `/chat?workspace=${workspaceId}&document=${documentId}`,
-        );
+        router.push(buildChatUrl());
       }
     } catch (err) {
       setError(
@@ -849,7 +869,7 @@ export default function ChatManager({
           </div>
 
           <div className="mt-1 truncate text-xs text-[#7183a5]">
-            {documentName}
+            {documentName ?? "All workspace documents"}
           </div>
         </div>
 

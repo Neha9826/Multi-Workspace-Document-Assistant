@@ -3,182 +3,194 @@ import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-export async function GET(request: Request) {
+export async function GET(
+  request: Request,
+) {
   try {
-    const supabase = await createClient();
+    const supabase =
+      await createClient();
 
     const {
       data: { user },
-      error: authError,
     } = await supabase.auth.getUser();
 
-    if (authError || !user) {
+    if (!user) {
       return NextResponse.json(
-        { error: "Unauthorized" },
+        { error: "Unauthorized." },
         { status: 401 },
       );
     }
 
-    const url = new URL(request.url);
+    const { searchParams } =
+      new URL(request.url);
 
     const workspaceId =
-      url.searchParams.get("workspace");
+      searchParams.get("workspace")?.trim() ||
+      "";
 
     const documentId =
-      url.searchParams.get("document");
+      searchParams.get("document")?.trim() ||
+      null;
 
     const conversationId =
-      url.searchParams.get("conversation");
+      searchParams
+        .get("conversation")
+        ?.trim() || null;
 
-    if (!workspaceId || !documentId) {
+    if (!workspaceId) {
       return NextResponse.json(
         {
           error:
-            "Workspace and document are required.",
+            "Workspace is required.",
         },
         { status: 400 },
       );
     }
 
     /*
-     * Verify workspace ownership.
+     * Workspace isolation
      */
-    const {
-      data: workspace,
-      error: workspaceError,
-    } = await supabase
-      .from("workspaces")
-      .select("id")
-      .eq("id", workspaceId)
-      .eq("owner_id", user.id)
-      .maybeSingle();
-
-    if (workspaceError) {
-      console.error(
-        "History workspace verification failed:",
-        workspaceError,
-      );
-
-      return NextResponse.json(
-        {
-          error:
-            "Failed to verify workspace.",
-        },
-        { status: 500 },
-      );
-    }
+    const { data: workspace } =
+      await supabase
+        .from("workspaces")
+        .select("id")
+        .eq("id", workspaceId)
+        .eq("owner_id", user.id)
+        .maybeSingle();
 
     if (!workspace) {
       return NextResponse.json(
         {
-          error: "Workspace not found.",
+          error:
+            "Workspace not found.",
         },
         { status: 404 },
       );
     }
 
     /*
-     * Verify document belongs to workspace.
+     * Document isolation
      */
-    const {
-      data: document,
-      error: documentError,
-    } = await supabase
-      .from("documents")
-      .select("id, file_name")
-      .eq("id", documentId)
-      .eq("workspace_id", workspaceId)
-      .maybeSingle();
+    if (documentId) {
+      const { data: document } =
+        await supabase
+          .from("documents")
+          .select("id")
+          .eq("id", documentId)
+          .eq(
+            "workspace_id",
+            workspaceId,
+          )
+          .maybeSingle();
 
-    if (documentError) {
-      console.error(
-        "History document verification failed:",
-        documentError,
-      );
-
-      return NextResponse.json(
-        {
-          error:
-            "Failed to verify document.",
-        },
-        { status: 500 },
-      );
-    }
-
-    if (!document) {
-      return NextResponse.json(
-        {
-          error: "Document not found.",
-        },
-        { status: 404 },
-      );
-    }
-
-    /*
-     * Load conversations for this exact:
-     *
-     * user + workspace + document
-     */
-    const {
-      data: conversations,
-      error: conversationsError,
-    } = await supabase
-      .from("chat_conversations")
-      .select(
-        "id, title, created_at, updated_at",
-      )
-      .eq("user_id", user.id)
-      .eq("workspace_id", workspaceId)
-      .eq("document_id", documentId)
-      .order("updated_at", {
-        ascending: false,
-      });
-
-    if (conversationsError) {
-      console.error(
-        "Conversation history query failed:",
-        conversationsError,
-      );
-
-      return NextResponse.json(
-        {
-          error:
-            conversationsError.message ||
-            "Failed to load chat history.",
-        },
-        { status: 500 },
-      );
-    }
-
-    let messages: unknown[] = [];
-
-    /*
-     * If a conversation was requested,
-     * load its messages as well.
-     */
-    if (conversationId) {
-      const {
-        data: conversation,
-        error: conversationError,
-      } = await supabase
-        .from("chat_conversations")
-        .select("id")
-        .eq("id", conversationId)
-        .eq("user_id", user.id)
-        .eq("workspace_id", workspaceId)
-        .eq("document_id", documentId)
-        .maybeSingle();
-
-      if (conversationError) {
-        console.error(
-          "Conversation verification failed:",
-          conversationError,
-        );
-
+      if (!document) {
         return NextResponse.json(
           {
             error:
-              "Failed to verify conversation.",
+              "Document not found in this workspace.",
+          },
+          { status: 404 },
+        );
+      }
+    }
+
+    /*
+     * Conversation list
+     */
+    let conversationsQuery =
+      supabase
+        .from("chat_conversations")
+        .select(
+          "id, title, created_at, updated_at",
+        )
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "workspace_id",
+          workspaceId,
+        );
+
+    conversationsQuery =
+      documentId
+        ? conversationsQuery.eq(
+            "document_id",
+            documentId,
+          )
+        : conversationsQuery.is(
+            "document_id",
+            null,
+          );
+
+    const {
+      data: conversations,
+      error:
+        conversationsError,
+    } =
+      await conversationsQuery.order(
+        "updated_at",
+        {
+          ascending: false,
+        },
+      );
+
+    if (conversationsError) {
+      return NextResponse.json(
+        {
+          error:
+            conversationsError.message,
+        },
+        { status: 500 },
+      );
+    }
+
+    /*
+     * Selected conversation messages
+     */
+    let messages: unknown[] = [];
+
+    if (conversationId) {
+      let conversationQuery =
+        supabase
+          .from("chat_conversations")
+          .select("id")
+          .eq(
+            "id",
+            conversationId,
+          )
+          .eq(
+            "user_id",
+            user.id,
+          )
+          .eq(
+            "workspace_id",
+            workspaceId,
+          );
+
+      conversationQuery =
+        documentId
+          ? conversationQuery.eq(
+              "document_id",
+              documentId,
+            )
+          : conversationQuery.is(
+              "document_id",
+              null,
+            );
+
+      const {
+        data: conversation,
+        error:
+          conversationError,
+      } =
+        await conversationQuery.maybeSingle();
+
+      if (conversationError) {
+        return NextResponse.json(
+          {
+            error:
+              conversationError.message,
           },
           { status: 500 },
         );
@@ -196,7 +208,8 @@ export async function GET(request: Request) {
 
       const {
         data: conversationMessages,
-        error: messagesError,
+        error:
+          messagesError,
       } = await supabase
         .from("chat_messages")
         .select(
@@ -211,26 +224,20 @@ export async function GET(request: Request) {
         });
 
       if (messagesError) {
-        console.error(
-          "Conversation messages query failed:",
-          messagesError,
-        );
-
         return NextResponse.json(
           {
             error:
-              messagesError.message ||
-              "Failed to load conversation messages.",
+              messagesError.message,
           },
           { status: 500 },
         );
       }
 
-      messages = conversationMessages ?? [];
+      messages =
+        conversationMessages ?? [];
     }
 
     return NextResponse.json({
-      success: true,
       conversations:
         conversations ?? [],
       messages,
@@ -246,7 +253,7 @@ export async function GET(request: Request) {
         error:
           error instanceof Error
             ? error.message
-            : "Unexpected error.",
+            : "Something went wrong.",
       },
       { status: 500 },
     );

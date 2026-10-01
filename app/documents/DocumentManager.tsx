@@ -48,6 +48,15 @@ function formatDate(dateString: string) {
   return `${day}/${month}/${year}`;
 }
 
+async function calculateFileHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export default function DocumentManager({
   userId,
   workspaceId,
@@ -136,6 +145,123 @@ export default function DocumentManager({
     setUploading(true);
 
     try {
+      /*
+       * Calculate a content hash before uploading anything.
+       * The hash is based on the actual PDF bytes, not the filename.
+       */
+      const fileHash = await calculateFileHash(file);
+
+      /*
+       * Fast idempotency check for documents uploaded after the
+       * file_hash migration.
+       */
+      const {
+        data: existingByHash,
+        error: hashLookupError,
+      } = await supabase
+        .from("documents")
+        .select(
+          "id, workspace_id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
+        )
+        .eq("workspace_id", workspaceId)
+        .eq("file_hash", fileHash)
+        .maybeSingle();
+
+      if (hashLookupError) {
+        setError(hashLookupError.message);
+        return;
+      }
+
+      if (existingByHash) {
+        setMessage(
+          `This document is already uploaded in "${workspaceName}".`,
+        );
+        await loadDocuments();
+        return;
+      }
+
+      /*
+       * Backward-compatible check for documents created before
+       * file_hash was added. This prevents an existing document
+       * from being uploaded again after the migration.
+       *
+       * We only inspect candidates with the same filename and size,
+       * then compare their actual SHA-256 hash.
+       */
+      const {
+        data: possibleDuplicates,
+        error: duplicateLookupError,
+      } = await supabase
+        .from("documents")
+        .select(
+          "id, workspace_id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
+        )
+        .eq("workspace_id", workspaceId)
+        .eq("file_name", file.name)
+        .eq("size_bytes", file.size)
+        .limit(10);
+
+      if (duplicateLookupError) {
+        setError(duplicateLookupError.message);
+        return;
+      }
+
+      for (const candidate of (possibleDuplicates ??
+        []) as DocumentRecord[]) {
+        try {
+          const {
+            data: existingFile,
+            error: existingFileError,
+          } = await supabase.storage
+            .from(BUCKET)
+            .download(candidate.storage_path);
+
+          if (existingFileError || !existingFile) {
+            continue;
+          }
+
+          const existingBuffer = await existingFile.arrayBuffer();
+          const existingHashBuffer = await crypto.subtle.digest(
+            "SHA-256",
+            existingBuffer,
+          );
+
+          const existingHash = Array.from(
+            new Uint8Array(existingHashBuffer),
+          )
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("");
+
+          if (existingHash === fileHash) {
+            /*
+             * Try to backfill the hash for this older document.
+             * If another legacy duplicate already has the hash,
+             * we still treat the upload as a duplicate.
+             */
+            const { error: backfillError } = await supabase
+              .from("documents")
+              .update({ file_hash: fileHash })
+              .eq("id", candidate.id)
+              .eq("workspace_id", workspaceId);
+
+            if (backfillError && backfillError.code !== "23505") {
+              console.warn(
+                "Could not backfill document hash:",
+                backfillError.message,
+              );
+            }
+
+            setMessage(
+              `This document is already uploaded in "${workspaceName}".`,
+            );
+            await loadDocuments();
+            return;
+          }
+        } catch {
+          // Ignore an individual candidate and continue checking others.
+        }
+      }
+
       const safeName = file.name
         .normalize("NFKD")
         .replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -172,6 +298,7 @@ export default function DocumentManager({
           mime_type: file.type || "application/pdf",
           size_bytes: file.size,
           uploaded_by: userId,
+          file_hash: fileHash,
         })
         .select(
           "id, workspace_id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at",
@@ -179,9 +306,21 @@ export default function DocumentManager({
         .single();
 
       if (metadataError || !document) {
+        /*
+         * The unique workspace/file_hash index protects against
+         * concurrent duplicate uploads.
+         */
         await supabase.storage
           .from(BUCKET)
           .remove([storagePath]);
+
+        if (metadataError?.code === "23505") {
+          setMessage(
+            `This document is already uploaded in "${workspaceName}".`,
+          );
+          await loadDocuments();
+          return;
+        }
 
         setError(
           metadataError?.message ||
@@ -371,6 +510,15 @@ export default function DocumentManager({
           <p className="mt-2 text-slate-400">
             Upload and manage PDFs in this workspace.
           </p>
+
+          <Link
+            href={`/chat?workspace=${encodeURIComponent(
+              workspaceId,
+            )}`}
+            className="mt-4 inline-flex items-center rounded-lg border border-blue-800 bg-blue-950/40 px-4 py-2 text-sm font-medium text-blue-300 transition hover:bg-blue-900/50"
+          >
+            ✦ Ask AI about this workspace
+          </Link>
         </div>
 
         <label
