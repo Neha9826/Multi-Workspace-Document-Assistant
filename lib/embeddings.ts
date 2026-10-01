@@ -34,7 +34,7 @@ async function getExtractor(): Promise<FeatureExtractionPipeline> {
       "feature-extraction",
       EMBEDDING_MODEL,
       {
-        device: "wasm",
+        device: "cpu",
 
         progress_callback: (info) => {
           if (info.status === "progress") {
