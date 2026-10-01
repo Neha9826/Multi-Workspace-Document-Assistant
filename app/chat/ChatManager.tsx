@@ -43,6 +43,34 @@ type ChatManagerProps = {
   initialConversationId: string | null;
 };
 
+type ChatApiResponse = {
+  error?: string;
+  conversationId?: string;
+  answer?: string;
+  sources?: Source[];
+  toolCalls?: unknown[];
+};
+
+async function readJsonResponse(
+  response: Response,
+): Promise<ChatApiResponse> {
+  const responseText = await response.text();
+
+  if (!responseText.trim()) {
+    throw new Error(
+      `Chat API returned an empty response (${response.status}).`,
+    );
+  }
+
+  try {
+    return JSON.parse(responseText) as ChatApiResponse;
+  } catch {
+    throw new Error(
+      `Chat API returned invalid JSON (${response.status}).`,
+    );
+  }
+}
+
 function Icon({
   name,
   size = 16,
@@ -606,12 +634,18 @@ export default function ChatManager({
         );
 
       const data =
-        await response.json();
+        await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(
           data.error ||
-            "Retry failed.",
+            `Retry failed (${response.status}).`,
+        );
+      }
+
+      if (!data.conversationId) {
+        throw new Error(
+          "Chat API did not return a conversation ID.",
         );
       }
 
@@ -692,12 +726,18 @@ export default function ChatManager({
         );
 
       const data =
-        await response.json();
+        await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(
           data.error ||
-            "Failed to generate an answer.",
+            `Failed to generate an answer (${response.status}).`,
+        );
+      }
+
+      if (!data.conversationId) {
+        throw new Error(
+          "Chat API did not return a conversation ID.",
         );
       }
 
