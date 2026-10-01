@@ -3,6 +3,9 @@ import {
   pipeline,
   type FeatureExtractionPipeline,
 } from "@huggingface/transformers";
+env.cacheDir = "/tmp/transformers-cache";
+env.useBrowserCache = false;
+env.useFSCache = true;
 
 const EMBEDDING_MODEL =
   "onnx-community/all-MiniLM-L6-v2-ONNX";
