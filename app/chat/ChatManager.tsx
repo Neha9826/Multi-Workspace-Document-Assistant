@@ -49,6 +49,8 @@ type ChatApiResponse = {
   answer?: string;
   sources?: Source[];
   toolCalls?: unknown[];
+  conversations?: Conversation[];
+  messages?: Message[];
 };
 
 async function readJsonResponse(
@@ -416,7 +418,7 @@ export default function ChatManager({
           );
 
         const data =
-          await response.json();
+          await readJsonResponse(response);
 
         if (!response.ok) {
           throw new Error(
@@ -791,7 +793,7 @@ export default function ChatManager({
         );
 
       const data =
-        await response.json();
+        await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(
@@ -855,7 +857,7 @@ export default function ChatManager({
         );
 
       const data =
-        await response.json();
+        await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(
