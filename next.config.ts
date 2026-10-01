@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {};
+const nextConfig: NextConfig = {
+  outputFileTracingIncludes: {
+    "/api/chat": [
+      "./node_modules/onnxruntime-node/**/*",
+    ],
+  },
+};
 
 export default nextConfig;
