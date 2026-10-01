@@ -1,4 +1,5 @@
 import {
+  env,
   pipeline,
   type FeatureExtractionPipeline,
 } from "@huggingface/transformers";
@@ -7,6 +8,15 @@ const EMBEDDING_MODEL =
   "onnx-community/all-MiniLM-L6-v2-ONNX";
 
 const EMBEDDING_DIMENSIONS = 384;
+
+/*
+ * Force Transformers.js to use WASM instead of the
+ * native Node ONNX runtime.
+ *
+ * This avoids requiring `onnxruntime-node` in Vercel.
+ */
+env.allowLocalModels = false;
+env.useBrowserCache = false;
 
 let extractorPromise:
   | Promise<FeatureExtractionPipeline>
@@ -17,12 +27,15 @@ async function getExtractor(): Promise<FeatureExtractionPipeline> {
     console.log("========================================");
     console.log("Loading embedding model...");
     console.log(`Model: ${EMBEDDING_MODEL}`);
+    console.log("Runtime: WASM");
     console.log("========================================");
 
     extractorPromise = pipeline(
       "feature-extraction",
       EMBEDDING_MODEL,
       {
+        device: "wasm",
+
         progress_callback: (info) => {
           if (info.status === "progress") {
             const progress =
