@@ -1,88 +1,190 @@
 # Multi-Workspace Document Assistant
 
-A production-style multi-tenant document assistant built for the Abstrabit Software Engineer assessment.
+A production-style multi-tenant document AI application built with Next.js, Supabase, pgvector, local ONNX embeddings, and Groq. It demonstrates workspace-isolated RAG, persistent chat, safe tool calling, document ingestion, citations, and audit logging.
 
-## Stack
+## Why this project
 
-- Next.js App Router + TypeScript
-- Supabase Auth and Storage
-- PostgreSQL + pgvector
-- Local ONNX embeddings: `onnx-community/all-MiniLM-L6-v2-ONNX` (384 dimensions)
-- Groq: `openai/gpt-oss-120b`
-- React + Tailwind CSS
+The application was built as an engineering assessment project with an emphasis on **correctness, isolation, reliability, and observable AI behavior**, rather than simply wiring an LLM to a document search box.
 
-## What it does
+The core design requirement is that documents, retrieval, conversations, tasks, and tool activity remain scoped to the authenticated user's active workspace.
 
-The application supports multiple workspaces per authenticated user. Documents, retrieval, chats, tasks, and tool-call logs are scoped to the active workspace.
+## Architecture
 
-All document chunks live in one shared `document_chunks` vector table. Workspace filtering is applied inside the vector-search RPC, rather than filtering results after retrieval.
+```text
+                         ┌──────────────────────┐
+                         │      Next.js 16      │
+                         │   App Router + UI    │
+                         └──────────┬───────────┘
+                                    │
+                         Authenticated request
+                                    │
+                  ┌─────────────────▼─────────────────┐
+                  │          Supabase Auth            │
+                  └─────────────────┬─────────────────┘
+                                    │
+                 ┌──────────────────▼──────────────────┐
+                 │       Workspace-scoped backend     │
+                 └───────┬───────────────┬────────────┘
+                         │               │
+              ┌──────────▼──────┐  ┌────▼────────────┐
+              │ Supabase Storage │  │ PostgreSQL +    │
+              │ Private PDFs     │  │ pgvector        │
+              └─────────────────┘  └────┬────────────┘
+                                        │
+                              Vector retrieval / RAG
+                                        │
+                              ┌─────────▼─────────┐
+                              │   Groq LLM        │
+                              │ Tool calling      │
+                              └───────────────────┘
+```
 
-### Chat scopes
+### Retrieval model
 
-- **Document AI:** retrieves only the selected document.
-- **Workspace AI:** retrieves across all documents in the active workspace.
+All document chunks are stored in a shared `document_chunks` vector table. The active workspace is supplied to the vector-search RPC so workspace filtering happens **inside retrieval**, not after unrelated results have already been returned.
 
-Both modes preserve chat history, citations, tool execution, and workspace isolation.
+Two retrieval scopes are supported:
 
-## Implemented features
+- **Document AI** — searches only the selected document.
+- **Workspace AI** — searches all documents belonging to the active workspace.
 
-- Email/password and Google authentication
+Both modes retain citations and chat history.
+
+## Features
+
+### Authentication and workspaces
+
+- Email/password authentication
+- Google authentication
+- Persistent sessions
 - Protected application routes
-- Multiple workspaces with switching
-- Private workspace-scoped PDF storage
-- PDF extraction and chunking
-- 384-dimensional embeddings and shared pgvector storage
-- Workspace-scoped and document-scoped RAG
+- Multiple workspaces per user
+- Workspace switching
+- Server-controlled user and workspace identity
+
+### Document pipeline
+
+- Private PDF storage
+- Workspace-scoped upload/download/delete
+- PDF text extraction with `unpdf`
+- Chunking
+- 384-dimensional ONNX embeddings
+- Shared pgvector storage
+- SHA-256 based ingestion idempotency
+
+### AI / RAG
+
+- Workspace-scoped RAG
+- Document-scoped RAG
 - Source/chunk citations
-- Honest `I don't know` behavior
+- Persistent conversations and messages
+- Explicit unsupported-question handling
 - Prompt-injection resistance
-- `save_task` and `list_tasks` tools
-- Server-side tool argument validation
-- Server-controlled user/workspace identity
+- Groq-powered generation
+- Graceful external LLM failure handling
+
+### Tool calling
+
+The assistant exposes controlled task-management tools:
+
+- `save_task`
+- `list_tasks`
+
+Tool arguments are validated server-side. The model does not provide authenticated `user_id` or `workspace_id`; those values are derived from the authenticated server context.
+
+### Chat experience
+
+- New conversations
+- Rename conversations
+- Delete conversations
+- Edit/resend messages
+- Retry responses
+- Copy responses
 - Persistent chat history
-- New chat, rename, delete, edit/resend, retry, and copy
-- Tool-call audit log with arguments, results, success/failure, and workspace
-- Idempotent PDF ingestion using SHA-256 file hashes
-- Graceful LLM failure handling
+
+### Observability
+
+Tool execution is persisted in `tool_call_logs`, including arguments, results, success/failure state, and workspace context.
 
 ## Security and reliability
 
 ### Workspace isolation
 
-Every retrieval query includes the active workspace filter inside the vector query. A document from another workspace cannot be retrieved or cited through normal RAG.
+Every vector retrieval operation receives the active workspace context. A document from another workspace therefore cannot be returned or cited through normal RAG.
 
-### Prompt injection
+### Untrusted document content
 
-Retrieved document text is treated as untrusted data, never as instructions. Malicious document tests attempting to reveal system prompts, API keys, and database credentials were rejected.
+Retrieved PDF text is treated as **data**, not instructions. Prompt-injection attempts contained inside documents are not allowed to override system behavior or expose secrets.
 
-### Safe tools
+### Controlled tool execution
 
-Only known tools can execute. Arguments are validated. Unknown tools and invalid required arguments are rejected. The model never supplies the authenticated `user_id` or `workspace_id`; those come from the server-side authenticated context.
+Only explicitly supported tools can execute. Required arguments are validated before execution, and identity fields are controlled by the server.
 
-### LLM failure handling
+### Failure-safe chat persistence
 
-The user's question is persisted before the external Groq operation so a failed LLM request does not silently lose the question. This was tested with an intentionally invalid Groq API key.
+The user's message is persisted before the external Groq request. If the LLM call fails, the question is not silently lost.
 
 ### Idempotent ingestion
 
-Uploaded PDFs are hashed with SHA-256. A workspace/file-hash uniqueness constraint prevents the same document from creating a second document/chunk set in the same workspace.
+Uploaded PDFs are hashed with SHA-256. A workspace/file-hash uniqueness constraint prevents duplicate ingestion of the same document into the same workspace.
 
 ### Secrets
 
-Real secrets belong only in `.env.local` or deployment-provider secret configuration. `.env.example` contains placeholders only.
+Secrets belong in `.env.local` or deployment-provider secret configuration. `.env.example` contains placeholders only.
 
-## Local setup
+## Tech Stack
 
-Requirements:
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 App Router |
+| Language | TypeScript |
+| UI | React 19, Tailwind CSS |
+| Authentication | Supabase Auth |
+| Storage | Supabase Storage |
+| Database | Supabase PostgreSQL |
+| Vector search | pgvector |
+| PDF extraction | unpdf |
+| Embeddings | Hugging Face Transformers + ONNX |
+| LLM | Groq |
+| Runtime | Node.js 20+ |
+
+## Data Model
+
+Core tables include:
+
+- `workspaces`
+- `documents`
+- `document_chunks`
+- `chat_conversations`
+- `chat_messages`
+- `tasks`
+- `tool_call_logs`
+
+The vector store is shared, while application-level workspace scoping determines which records and chunks are available to a request.
+
+## Repository Documentation
+
+- `README.md` — architecture, features, setup, testing and deployment
+- `AI_NOTES.md` — AI-assisted development notes and engineering decisions
+- `AGENTS.md` — repository coding/context instructions
+- `CLAUDE.md` — references the agent instructions
+- `.env.example` — safe environment-variable template
+
+## Local Development
+
+### Requirements
 
 - Node.js 20+
 - npm
 - Supabase project
 - Groq API key
 
-Install:
+### Install
 
 ```bash
+git clone https://github.com/Neha9826/Multi-Workspace-Document-Assistant.git
+cd Multi-Workspace-Document-Assistant
+
 npm install
 ```
 
@@ -95,9 +197,9 @@ GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=openai/gpt-oss-120b
 ```
 
-Apply the SQL files in `supabase/` to the Supabase project according to the repository's schema/migration order.
+Apply the SQL files in `supabase/` in the repository's documented schema/migration order.
 
-Run:
+Start the application:
 
 ```bash
 npm run dev
@@ -105,38 +207,38 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-Verify before deployment:
+### Verification
 
 ```bash
 npm run lint
 npm run build
 ```
 
-## Assessment test flow
+## Assessment / Verification Flow
 
 1. Sign in.
-2. Create or switch between two workspaces.
-3. Upload a different PDF into each workspace.
-4. Ask Workspace AI a question whose answer exists only in Workspace A.
-5. Switch to Workspace B and ask the same question. Workspace A content must not appear.
-6. Open a document and use Document AI. It must stay document-scoped.
-7. Ask a question unsupported by the active corpus. The assistant should say it does not have enough information.
-8. Ask the assistant to save a task.
-9. Ask it to list saved tasks.
-10. Inspect the dashboard tool-call log.
-11. Re-upload the exact same PDF into the same workspace. It must not create duplicate document/chunk data.
-12. Test chat history, rename/delete, retry, edit, and copy.
-13. Refresh and verify authentication/history persist.
+2. Create two workspaces.
+3. Upload different PDFs into each workspace.
+4. Ask Workspace AI a question answered only by Workspace A.
+5. Switch to Workspace B and repeat the question.
+6. Verify Workspace A content is not retrieved or cited.
+7. Open a document and verify Document AI remains document-scoped.
+8. Ask a question unsupported by the active corpus and verify the assistant does not invent an answer.
+9. Save and list a task through tool calling.
+10. Inspect the tool-call audit log.
+11. Upload the same PDF twice into one workspace and verify ingestion remains idempotent.
+12. Exercise chat rename, delete, retry, edit/resend and copy flows.
+13. Refresh the application and verify authentication and chat history persist.
 
-### Suggested isolation test
+### Example isolation test
 
-Put this distinctive sentence in a Workspace A PDF:
+Place this sentence in a Workspace A document:
 
 ```text
 The Acme migration deadline is 17 November 2042.
 ```
 
-Ask in Workspace A:
+Ask Workspace A:
 
 ```text
 What is the Acme migration deadline?
@@ -144,25 +246,11 @@ What is the Acme migration deadline?
 
 Then switch to Workspace B and ask the same question. Workspace B must not retrieve or cite the Workspace A document.
 
-## Database
-
-Important tables include:
-
-- `workspaces`
-- `documents`
-- `document_chunks`
-- `chat_conversations`
-- `chat_messages`
-- `tasks`
-- `tool_call_logs`
-
-The vector store is shared across workspaces.
-
 ## Deployment
 
-The application is intended for a free-tier public deployment such as Vercel with Supabase.
+The application is suitable for a public deployment using a Next.js host such as Vercel with Supabase.
 
-Production environment variables:
+Required production variables:
 
 ```text
 NEXT_PUBLIC_SUPABASE_URL
@@ -171,15 +259,31 @@ GROQ_API_KEY
 GROQ_MODEL
 ```
 
-Before submission, verify the deployed URL for authentication, workspace switching, upload/ingestion, document AI, workspace AI, citations, tool execution, tool logs, isolation, and chat persistence.
+Before deployment, verify authentication, workspace switching, PDF ingestion, document/workspace RAG, citations, tool execution, audit logs, isolation, and chat persistence.
 
-## Documentation
+## Engineering Highlights
 
-- `README.md` — project overview, setup, architecture, testing, deployment
-- `AI_NOTES.md` — AI-assisted development notes and engineering decisions
-- `AGENTS.md` — project AI coding/context instructions
-- `CLAUDE.md` — references `AGENTS.md`
-- `.env.example` — environment variable template with no real secrets
+This project demonstrates several patterns relevant to production AI applications:
+
+- Multi-tenant/workspace-aware retrieval
+- Vector search with database-level filtering
+- Local embedding generation to reduce dependency on hosted embedding APIs
+- Server-controlled AI tool execution
+- Persistent AI conversations
+- Idempotent document ingestion
+- Prompt-injection-aware RAG design
+- Explicit failure handling around external LLM calls
+- Auditable tool execution
+- Full-stack TypeScript architecture
+
+## Project Status
+
+Assessment project with the core RAG, workspace isolation, tool-calling, chat, storage, and observability workflows implemented.
+
+## Author
+
+**Neha Pattnayak**  
+Senior Full Stack Engineer
 
 ## License
 
