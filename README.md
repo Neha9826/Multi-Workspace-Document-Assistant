@@ -174,7 +174,7 @@ The vector store is shared, while application-level workspace scoping determines
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 22+
 - npm
 - Supabase project
 - Groq API key
