@@ -34,7 +34,7 @@ export default function LoginPage() {
           </div>
 
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Abstrabit Doc Assistant
+             Doc Assistant
           </h1>
 
           <p className="mt-3 text-sm text-slate-400 sm:text-base">
@@ -243,7 +243,7 @@ export default function LoginPage() {
             </form>
 
             <p className="mt-5 text-center text-xs text-slate-500">
-              New to Abstrabit? Create your account here.
+              New to Doc Assistant? Create your account here.
             </p>
           </section>
 

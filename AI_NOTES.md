@@ -2,7 +2,7 @@
 
 ## Project
 
-Multi-Workspace Document Assistant — Abstrabit Software Engineer assessment.
+Multi-Workspace Document Assistant
 
 ## AI tools and models
 

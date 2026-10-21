@@ -56,7 +56,7 @@ export default async function DashboardPage() {
       <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-6 py-5">
         <div>
           <h1 className="text-xl font-bold">
-            Abstrabit Doc Assistant
+             Doc Assistant
           </h1>
           <p className="mt-1 text-sm text-slate-400">
             Your workspace dashboard

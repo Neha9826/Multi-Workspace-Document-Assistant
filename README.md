@@ -1,6 +1,11 @@
 # Multi-Workspace Document Assistant
 
+### HEAD
 A production-style multi-tenant document AI application built with Next.js, Supabase, pgvector, local ONNX embeddings, and Groq. It demonstrates workspace-isolated RAG, persistent chat, safe tool calling, document ingestion, citations, and audit logging.
+
+
+A production-style multi-tenant document assistant.
+### adf6c29 (Update branding)
 
 ## Why this project
 
